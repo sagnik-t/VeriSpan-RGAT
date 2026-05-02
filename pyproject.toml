@@ -1,0 +1,18 @@
+[project]
+name = "verispan-rgat"
+version = "0.1.0"
+description = ""
+authors = [
+    {name = "Sagnik Taraphdar",email = "code.sagnik@gmail.com"}
+]
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+]
+
+[tool.poetry]
+packages = [{include = "verispan_rgat", from = "src"}]
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
