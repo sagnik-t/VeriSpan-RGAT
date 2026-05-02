@@ -1,17 +1,19 @@
-[project]
+[tool.poetry]
 name = "verispan-rgat"
 version = "0.1.0"
-description = ""
-authors = [
-    {name = "Sagnik Taraphdar",email = "code.sagnik@gmail.com"}
-]
+description = "Span-Level Heterogeneous Graph Reasoning for General-Purpose Claim Verification"
+authors = ["Sagnik Taraphdar <code.sagnik@gmail.com>"]
 readme = "README.md"
-requires-python = ">=3.11"
-dependencies = [
-]
+packages = [{include = "claim_verifier", from = "src"}]
 
-[tool.poetry]
-packages = [{include = "verispan_rgat", from = "src"}]
+[tool.poetry.dependencies]
+python = ">=3.11,<3.14"
+
+[tool.poetry.group.dev.dependencies]
+pytest = "^9.0.3"
+black = "^26.3.1"
+ruff = "^0.15.12"
+ipykernel = "^7.2.0"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
