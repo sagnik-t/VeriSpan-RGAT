@@ -1,101 +1,106 @@
 """
 fever.py — FEVER dataset loader for VeriSpan-RGAT.
 
-Two-step process:
-  1. Load wiki sentence text from HuggingFace 'fever' (wiki_pages config).
-     This builds an in-memory lookup: page_title → {sent_id → text}.
-  2. Load claims + evidence metadata from 'fever' v1.0 and assemble
-     VerificationExample objects.
+Reads from locally downloaded JSONL files produced by scripts/download_fever.py.
+Does NOT use HuggingFace loading scripts (which were deprecated in datasets v3).
 
-Both datasets are downloaded automatically by the HuggingFace datasets
-library on first run and cached locally.
+Directory structure expected
+----------------------------
+    data/raw/fever/
+    ├── train.jsonl
+    ├── paper_dev.jsonl
+    ├── paper_test.jsonl
+    ├── shared_task_dev.jsonl
+    └── wiki-pages/
+        ├── wiki-001.jsonl
+        ├── wiki-002.jsonl
+        └── ...
 
 Usage
 -----
     from verispan.data.fever import FEVERProcessor
 
-    proc = FEVERProcessor(cache_dir="data/cache")
+    proc = FEVERProcessor(data_dir="data/raw/fever")
     train = proc.load("train")   # List[VerificationExample]
     dev   = proc.load("dev")
 """
 
 from __future__ import annotations
 
+import json
 import logging
+from pathlib import Path
 from typing import Dict, List, Optional, Tuple
-
-from datasets import load_dataset
 
 from .schema import VerificationExample, normalise_label
 
 logger = logging.getLogger(__name__)
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Wiki sentence database
-# ──────────────────────────────────────────────────────────────────────────────
+# ── WikiSentenceDB ────────────────────────────────────────────────────────────
 
 class WikiSentenceDB:
     """
-    In-memory lookup built from the HuggingFace 'fever' wiki_pages split.
+    In-memory lookup built from the FEVER wiki-pages JSONL files.
 
-    Structure after loading:
         _db[page_title][sent_id] = sentence_text
 
-    The wiki_pages split ships ~5.4M sentences (~2GB download, ~4GB in RAM).
-    Loading takes ≈ 2–3 min on first call; subsequent calls hit the HF cache
-    and take ≈ 30–60 s.
+    The wiki-pages directory contains ~109 JSONL files totalling ~5.4M sentences.
+    Loading takes ~60-90s on first call; subsequent calls within the same
+    process use the cached _db.
 
-    A module-level singleton (_WIKI_DB) means the database is built at most
-    once per Python process regardless of how many FEVERProcessor instances
-    exist.
+    A module-level singleton (_WIKI_DB) means the DB is built at most
+    once per Python process.
     """
 
     def __init__(self) -> None:
         self._db: Dict[str, Dict[int, str]] = {}
         self._loaded: bool = False
 
-    # ── public API ───────────────────────────────────────────────────────────
-
-    def load(self, cache_dir: Optional[str] = None) -> None:
-        """Download (or load from cache) and parse all FEVER wiki pages."""
+    def load(self, wiki_dir: Path) -> None:
         if self._loaded:
             return
+        if not wiki_dir.exists():
+            raise FileNotFoundError(
+                f"Wiki pages directory not found: {wiki_dir}\n"
+                f"Run: python scripts/download_fever.py --data_dir data/raw/fever"
+            )
+
+        jsonl_files = sorted(wiki_dir.glob("wiki-*.jsonl"))
+        if not jsonl_files:
+            raise FileNotFoundError(
+                f"No wiki-*.jsonl files found in {wiki_dir}.\n"
+                f"Run: python scripts/download_fever.py --data_dir data/raw/fever"
+            )
 
         logger.info(
-            "Loading FEVER wiki pages from HuggingFace "
-            "(first run ~2–3 min; subsequent runs use cache) ..."
+            f"Loading WikiSentenceDB from {len(jsonl_files)} files in {wiki_dir} ..."
         )
-        wiki_ds = load_dataset(
-            "fever",
-            "wiki_pages",
-            split="wikipedia_pages",
-            cache_dir=cache_dir,
-            trust_remote_code=True,
-        )
-
-        for row in wiki_ds:
-            page_title: str = row["id"]
-            lines_raw: str = row.get("lines", "") or ""
-            self._db[page_title] = self._parse_lines(lines_raw)
+        for fpath in jsonl_files:
+            with open(fpath, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    row = json.loads(line)
+                    page_title: str    = row["id"]
+                    lines_raw: str     = row.get("lines", "") or ""
+                    self._db[page_title] = self._parse_lines(lines_raw)
 
         self._loaded = True
         logger.info(f"WikiSentenceDB ready — {len(self._db):,} pages loaded.")
 
     def get(self, page: str, sent_id: int) -> Optional[str]:
-        """Return the sentence text for (page, sent_id), or None if absent."""
         return self._db.get(page, {}).get(sent_id)
 
     def __len__(self) -> int:
         return len(self._db)
 
-    # ── internals ────────────────────────────────────────────────────────────
-
     @staticmethod
     def _parse_lines(raw: str) -> Dict[int, str]:
         """
         Parse the tab-separated 'lines' field:
-            '0\\tFirst sentence.\\n1\\tSecond sentence.\\n...'
+            '0\\tFirst sentence.\\n1\\tSecond sentence.\\n'
         into {sent_id: text}.
         """
         result: Dict[int, str] = {}
@@ -108,55 +113,55 @@ class WikiSentenceDB:
                 try:
                     result[int(parts[0])] = parts[1].strip()
                 except ValueError:
-                    pass  # non-integer sentence id — skip
+                    pass
         return result
 
 
-# Module-level singleton so the DB is built at most once per process.
+# Module-level singleton
 _WIKI_DB: Optional[WikiSentenceDB] = None
 
 
-def _get_wiki_db(cache_dir: Optional[str] = None) -> WikiSentenceDB:
+def _get_wiki_db(wiki_dir: Path) -> WikiSentenceDB:
     global _WIKI_DB
     if _WIKI_DB is None:
         _WIKI_DB = WikiSentenceDB()
-        _WIKI_DB.load(cache_dir=cache_dir)
+        _WIKI_DB.load(wiki_dir)
     return _WIKI_DB
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# Evidence parsing helpers
-# ──────────────────────────────────────────────────────────────────────────────
+# ── Evidence parsing ──────────────────────────────────────────────────────────
 
-def _parse_evidence_groups(evidence: dict) -> List[List[Tuple[str, int]]]:
+def _parse_evidence_groups(
+    evidence: list,
+) -> List[List[Tuple[str, int]]]:
     """
-    Convert the FEVER evidence dict into a list of annotation groups.
+    Parse FEVER evidence from the raw JSONL format.
 
-    HuggingFace fever v1.0 evidence structure:
-        {
-            'wikipedia_url': [[str | None, ...], ...],  # outer = groups
-            'sent_id':        [[int, ...], ...],
+    FEVER JSONL evidence structure (one claim):
+        [
+            [                          ← annotation group (annotator)
+                [ann_id, ev_id, page_title, sent_id],
+                ...
+            ],
             ...
-        }
+        ]
 
-    NEI examples have url=None and sent_id=-1; these are filtered out.
-
-    Returns
-    -------
-    List of groups, where each group is a list of (page_title, sent_id).
+    Returns list of groups, each group is list of (page_title, sent_id).
+    NEI entries have page_title=None or sent_id=-1 — filtered out.
     """
     groups: List[List[Tuple[str, int]]] = []
-    urls = evidence.get("wikipedia_url", [])
-    sids = evidence.get("sent_id", [])
-
-    for url_group, sid_group in zip(urls, sids):
-        group: List[Tuple[str, int]] = []
-        for url, sid in zip(url_group, sid_group):
-            if url is not None and sid is not None and int(sid) >= 0:
-                group.append((str(url), int(sid)))
-        if group:
-            groups.append(group)
-
+    for group in evidence:
+        parsed: List[Tuple[str, int]] = []
+        for ev_item in group:
+            # ev_item = [ann_id, ev_id, page_title, sent_id]
+            if len(ev_item) < 4:
+                continue
+            page = ev_item[2]
+            sid  = ev_item[3]
+            if page is not None and sid is not None and int(sid) >= 0:
+                parsed.append((str(page), int(sid)))
+        if parsed:
+            groups.append(parsed)
     return groups
 
 
@@ -166,15 +171,8 @@ def _build_document(
     max_sentences: int,
 ) -> Tuple[str, List[Tuple[int, int]], List[str]]:
     """
-    Deduplicate evidence sentences across all annotation groups, look up their
-    text, and assemble:
-        document         — evidence sentences joined by single spaces
-        evidence_char_spans — [(start, end), ...] char positions in document
-        sentence_texts   — individual sentence strings (for debugging)
-
-    We cap at `max_sentences` to stay within DeBERTa's 512-token budget.
-    All sentences in the SUPPORTS / REFUTES evidence are marked as evidence
-    (sentence-level supervision, consistent with FEVER annotation granularity).
+    Resolve evidence (page, sent_id) pairs to text, deduplicate, and
+    assemble the document string with char-level evidence spans.
     """
     seen: set = set()
     ordered: List[str] = []
@@ -198,125 +196,127 @@ def _build_document(
 
     document = " ".join(ordered)
 
-    # Compute char spans (every sentence in the document IS evidence)
     char_spans: List[Tuple[int, int]] = []
     offset = 0
     for sent in ordered:
         start = offset
-        end = offset + len(sent)
+        end   = offset + len(sent)
         char_spans.append((start, end))
-        offset = end + 1  # +1 accounts for the joining space
+        offset = end + 1
 
     return document, char_spans, ordered
 
 
-# ──────────────────────────────────────────────────────────────────────────────
-# FEVERProcessor
-# ──────────────────────────────────────────────────────────────────────────────
+# ── FEVERProcessor ────────────────────────────────────────────────────────────
 
 class FEVERProcessor:
     """
-    Loads a FEVER split and returns List[VerificationExample].
+    Loads FEVER splits from local JSONL files and returns List[VerificationExample].
 
     Parameters
     ----------
-    cache_dir : str, optional
-        HuggingFace datasets cache directory.  Defaults to ~/.cache/huggingface.
+    data_dir : str
+        Path to the directory containing FEVER JSONL files and wiki-pages/.
+        Default: "data/raw/fever"
     max_doc_sentences : int
-        Maximum number of evidence sentences to include in the document.
-        Caps the sequence length for DeBERTa.  Default: 5.
+        Maximum evidence sentences per example.  Default: 5.
     skip_nei : bool
-        Drop NOT ENOUGH INFO examples.  Useful when computing the contrastive
-        loss which requires both Supports and Refutes within a batch.
-        Default: False.
+        Drop NOT ENOUGH INFO examples.  Default: False.
     """
 
-    _SPLIT_MAP: dict[str, str] = {
-        "train": "train",
-        "dev": "labelled_dev",
-        "test": "paper_test",
+    _SPLIT_MAP: Dict[str, str] = {
+        "train": "train.jsonl",
+        "dev":   "paper_dev.jsonl",
+        "test":  "paper_test.jsonl",
+        "shared_task_dev": "shared_task_dev.jsonl",
     }
 
     def __init__(
         self,
-        cache_dir: Optional[str] = None,
+        data_dir: str = "data/raw/fever",
         max_doc_sentences: int = 5,
         skip_nei: bool = False,
+        # Legacy parameter — ignored, kept for backwards compatibility
+        cache_dir: Optional[str] = None,
     ) -> None:
-        self.cache_dir = cache_dir
+        self.data_dir         = Path(data_dir)
         self.max_doc_sentences = max_doc_sentences
-        self.skip_nei = skip_nei
+        self.skip_nei          = skip_nei
 
     # ── public ───────────────────────────────────────────────────────────────
 
     def load(self, split: str = "train") -> List[VerificationExample]:
-        """
-        Load and return examples for a FEVER split.
+        filename = self._SPLIT_MAP.get(split)
+        if filename is None:
+            raise ValueError(
+                f"Unknown split {split!r}. "
+                f"Valid splits: {list(self._SPLIT_MAP.keys())}"
+            )
 
-        Parameters
-        ----------
-        split : 'train' | 'dev' | 'test'
-        """
-        hf_split = self._SPLIT_MAP.get(split, split)
-        logger.info(f"Loading FEVER split='{hf_split}' ...")
+        claim_path = self.data_dir / filename
+        if not claim_path.exists():
+            raise FileNotFoundError(
+                f"FEVER {split} file not found: {claim_path}\n"
+                f"Run: python scripts/download_fever.py --data_dir {self.data_dir}"
+            )
 
-        raw_ds = load_dataset(
-            "fever",
-            "v1.0",
-            split=hf_split,
-            cache_dir=self.cache_dir,
-            trust_remote_code=True,
-        )
-        wiki_db = _get_wiki_db(self.cache_dir)
-        return self._build_examples(raw_ds, split_name=split, wiki_db=wiki_db)
+        # Load wiki DB (singleton — only built once per process)
+        wiki_dir = self.data_dir / "wiki-pages"
+        wiki_db  = _get_wiki_db(wiki_dir)
+
+        logger.info(f"Loading FEVER split='{split}' from {claim_path} ...")
+        return self._build_examples(claim_path, split_name=split, wiki_db=wiki_db)
 
     # ── internals ────────────────────────────────────────────────────────────
 
     def _build_examples(
         self,
-        raw_ds,
+        claim_path: Path,
         split_name: str,
         wiki_db: WikiSentenceDB,
     ) -> List[VerificationExample]:
         examples: List[VerificationExample] = []
-        n_skipped_nei = 0
+        n_skipped_nei    = 0
         n_skipped_no_doc = 0
 
-        for row in raw_ds:
-            verdict = normalise_label(row["label"])
+        with open(claim_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                row = json.loads(line)
 
-            if self.skip_nei and verdict == 2:
-                n_skipped_nei += 1
-                continue
+                verdict = normalise_label(row["label"])
 
-            evidence_groups = _parse_evidence_groups(row["evidence"])
-
-            document, char_spans, sent_texts = _build_document(
-                evidence_groups, wiki_db, self.max_doc_sentences
-            )
-
-            if not document:
-                if verdict == 2:
-                    # NEI — empty document is valid; no evidence to annotate
-                    document = ""
-                    char_spans = []
-                    sent_texts = []
-                else:
-                    # SUPPORTS / REFUTES with unresolvable evidence — skip
-                    n_skipped_no_doc += 1
+                if self.skip_nei and verdict == 2:
+                    n_skipped_nei += 1
                     continue
 
-            examples.append(
-                VerificationExample(
-                    example_id=str(row["id"]),
-                    claim=str(row["claim"]),
-                    document=document,
-                    verdict=verdict,
-                    evidence_char_spans=char_spans,
-                    evidence_sentence_texts=sent_texts,
-                    source="fever",
+                evidence_groups = _parse_evidence_groups(row.get("evidence", []))
+
+                document, char_spans, sent_texts = _build_document(
+                    evidence_groups, wiki_db, self.max_doc_sentences
                 )
-            )
+
+                if not document:
+                    if verdict == 2:
+                        # NEI — empty document is valid
+                        pass
+                    else:
+                        n_skipped_no_doc += 1
+                        continue
+
+                examples.append(
+                    VerificationExample(
+                        example_id=str(row["id"]),
+                        claim=str(row["claim"]),
+                        document=document,
+                        verdict=verdict,
+                        evidence_char_spans=char_spans,
+                        evidence_sentence_texts=sent_texts,
+                        source="fever",
+                    )
+                )
 
         logger.info(
             f"FEVER '{split_name}': {len(examples):,} examples loaded "
