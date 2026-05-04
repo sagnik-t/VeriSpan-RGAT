@@ -30,10 +30,12 @@ _CANONICAL: dict[str, str] = {
     "REFUTES": "REFUTES",
     "REFUTED": "REFUTES",
     "CONTRADICT": "REFUTES",
+    "NOT_SUPPORTED": "REFUTES",
     "NOT ENOUGH INFO": "NOT ENOUGH INFO",
     "NEI": "NOT ENOUGH INFO",
     "NOTENOUGHINFO": "NOT ENOUGH INFO",
     "NOT_ENOUGH_INFO": "NOT ENOUGH INFO",
+    "PARTIALLY_SUPPORTED": "NOT ENOUGH INFO",  # partial support → insufficient evidence
 }
 
 
