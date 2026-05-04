@@ -10,6 +10,8 @@ packages = [{include = "claim_verifier", from = "src"}]
 python = ">=3.11,<3.14"
 sentencepiece = "^0.2.1"
 protobuf = "^7.34.1"
+wandb = "^0.26.1"
+spacy = "^3.8.14"
 
 [tool.poetry.group.dev.dependencies]
 pytest = "^9.0.3"

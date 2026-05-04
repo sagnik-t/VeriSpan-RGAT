@@ -3,6 +3,21 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Datasets
+data/raw/
+data/processed/
+data/cache/
+
+# Training outputs
+checkpoints/
+wandb/
+results/
+
+# Compiled model weights
+*.pt
+*.pth
+*.safetensors
+
 # C extensions
 *.so
 
