@@ -1,5 +1,8 @@
 """
-verispan.data — Data pipeline for VeriSpan-RGAT.
+verispan.data — Raw data loading only.
+
+Exports schema types and dataset processors.
+All tensor transformations live in verispan.processing.
 
 Public API
 ----------
@@ -7,12 +10,8 @@ Public API
         VerificationExample,
         LABEL2ID, ID2LABEL, normalise_label,
         FEVERProcessor,
-        WikiSentenceDB,
-        VerificationTokenizer,
-        SPAN_IGNORE_INDEX,
-        ClaimVerificationDataset,
-        VerificationCollator,
-        build_collator,
+        SciFatProcessor,
+        WiCEProcessor,
     )
 """
 
@@ -22,25 +21,18 @@ from .schema import (
     ID2LABEL,
     normalise_label,
 )
-from .fever import FEVERProcessor, WikiSentenceDB
-from .tokenization import VerificationTokenizer, SPAN_IGNORE_INDEX
-from .dataset import ClaimVerificationDataset
-from .collator import VerificationCollator, build_collator
+from .fever import FEVERProcessor
+from .scifact import SciFatProcessor
+from .wice import WiCEProcessor
 
 __all__ = [
-    # schema
+    # Schema
     "VerificationExample",
     "LABEL2ID",
     "ID2LABEL",
     "normalise_label",
-    # loaders
+    # Loaders
     "FEVERProcessor",
-    "WikiSentenceDB",
-    # tokenization
-    "VerificationTokenizer",
-    "SPAN_IGNORE_INDEX",
-    # dataset / collator
-    "ClaimVerificationDataset",
-    "VerificationCollator",
-    "build_collator",
+    "SciFatProcessor",
+    "WiCEProcessor",
 ]
